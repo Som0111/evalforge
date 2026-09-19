@@ -122,3 +122,20 @@ Run: `uvicorn evalforge.api:app --reload` (set `GEMINI_API_KEY` to enable the ju
 - Empty `input`/`output` scores 0.0 and is never sent to the judge. `failed` in the batch response counts judge attempts that returned nothing.
 - Before deploying (Phase 5): the endpoints are unauthenticated and each judged request spends Gemini quota, so add an API key or rate limit first. Batch judging is sequential and can be slow. The embedding model loads on the first scored request, not at startup.
 - Tests use Starlette's `TestClient` rather than `httpx.AsyncClient` (same httpx underneath, no async plugin needed).
+
+## Phase 5 — Docker, CI, Render (files done and verified locally; deploy steps are YOURS)
+
+Auth: `POST /evaluate` and `/evaluate/batch` need an `X-API-Key` header equal to the server's `EVALFORGE_API_KEY`. Missing/wrong key -> 401. Server with no key configured -> 503 (fails closed). `/health` and `/report` stay open.
+
+Verified locally: `docker build -t evalforge .` succeeds (image 2.4 GB), the container runs as a non-root user, `/health` -> 200, unauthenticated `/evaluate` -> 401, keyed `/evaluate` -> 200. 76 tests pass.
+NOT verified (needs your accounts): the GitHub Actions run, the Render deploy, and a live judged `/evaluate` call.
+
+**The CI eval-gate WILL FAIL on the first push to main.** It runs the real judge and fails if weighted kappa < 0.4 (`MIN_WEIGHTED_KAPPA`); the accepted result is about 0.05. That is the gate doing its job, not a bug. It also refuses a verdict when judge coverage < 0.9 (the free-tier quota cut our own runs to 60-80%), so it can fail for that reason too. The lint and test jobs need no API key. Options: leave it red, lower the threshold (honest only if you say why), or make the job non-blocking. That is your call.
+
+Steps for you:
+1. `git init`, commit, create a GitHub repo, push to `main`. Add repo secret `GEMINI_API_KEY` (only the eval-gate job uses it).
+2. In Render: New > Blueprint from the repo (`render.yaml`). Set `GEMINI_API_KEY`; Render generates `EVALFORGE_API_KEY` (read it in the dashboard, send it as `X-API-Key`).
+3. `render.yaml` uses `plan: starter`. The free 512 MB tier will very likely run out of memory (torch + embedding model).
+4. Write the live URL here: ______
+5. Test: `curl -X POST <url>/evaluate -H "X-API-Key: <key>" -H "content-type: application/json" -d '{"input": "...", "output": "..."}'` and check `judge` is non-null.
+- Port 8000 on this machine was already taken by another service, so local container tests used 8765.
