@@ -1,0 +1,26 @@
+[project]
+name = "evalforge"
+version = "0.1.0"
+description = "LLM output evaluation framework: rule-based, embedding, and LLM-as-judge scoring with calibration and bias detection."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "sentence-transformers",
+    "google-generativeai",
+    "scikit-learn",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+    "httpx",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
