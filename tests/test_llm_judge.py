@@ -88,3 +88,10 @@ def test_missing_api_key_raises_on_import(monkeypatch):
         importlib.reload(llm_judge)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")
     importlib.reload(llm_judge)
+
+
+def test_v2_prompt_formats_and_carries_the_rubric():
+    prompt = llm_judge.JUDGE_PROMPT_V2.format(input="IN {x}", output="OUT")
+    assert "IN {x}" in prompt and '{"faithfulness": 3' in prompt
+    assert "sentence limit" in prompt
+    assert llm_judge.PROMPTS == {"v1": llm_judge.JUDGE_PROMPT_V1, "v2": llm_judge.JUDGE_PROMPT_V2}

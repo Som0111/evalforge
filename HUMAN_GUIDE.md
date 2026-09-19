@@ -44,3 +44,72 @@ Open `data/raw/score_ci_brain.html` in a browser. Score all 20, click Export JSO
 - A 429 (quota) returns all-None immediately instead of retrying. Re-running `run_judge_on_dataset` skips records already judged and retries the rest.
 - Smoke check on 2 real records (2 API calls): judge gave 3/3/3/3 where you gave 2/3/3/2. The judge looks more lenient than you; Phase 3 will quantify it.
 - Caveat: the judge prompt's dimension definitions are the roadmap's, not the rubric shown on the scoring page, so some disagreement is rubric mismatch, not judge error.
+
+## Phase 3 — Calibration and bias (code done, 55 tests pass) — HUMAN DECISION NEEDED
+
+Real run: `python -m evalforge.evaluate`, 20 records, judge `gemini-3.1-flash-lite`, prompt v1, judge_coverage 1.0.
+Report: `reports/eval_report.json`, `reports/calibration_report.json`.
+
+| dimension | quadratic-weighted kappa | exact agreement |
+|---|---|---|
+| faithfulness | 0.07 | 50% |
+| relevance | 0.00 | 85% |
+| coherence | 0.00 | 70% |
+| conciseness | 0.00 | 20% |
+| **weighted avg** | **0.016** | |
+
+**This fails the 0.4 gate. The roadmap says the prompt needs revision before Phase 4.**
+
+Why (from the label distributions):
+- The judge answered 3 for relevance, coherence and conciseness on all 20 records. A constant rater has kappa 0 no matter what, so those three numbers say "judge does not discriminate", not "judge is randomly wrong".
+- Conciseness is the real miss: you gave 1 to six outputs (71-104 words) and 2 to ten; the judge gave 3 to all. The prompt's conciseness definition never mentions the "2-3 sentences" ask.
+- Faithfulness is the only dimension where the judge varied (9x 2, 11x 3). It agreed with you on 10 of 20; when it disagreed it was more lenient (9 of 10 cases).
+- Your own labels are skewed (relevance 17/20 are 3, coherence 14/20), so even a good judge gets a noisy kappa on this dimension. Treat the relevance/coherence kappas as low-information either way.
+- Verbosity bias: r = 0.04, p = 0.87, not significant (n = 20).
+- Position bias: detector is built and unit-tested with a mock judge only. There is no real pairwise judge prompt, so no real flip rate exists yet.
+
+Options: (a) write `JUDGE_PROMPT_V2` with your rubric (state the 2-3 sentence limit, ask for stricter grading, keep it 1-3), rerun, compare; (b) accept the number and report it honestly with the caveats above. Caution for (a): tuning the prompt on these same 20 labels overfits; the 4-record test split from `GoldenDataset.split` is too small to check it. Do not put a Kappa on the resume until this is settled.
+
+## Phase 3 — Prompt v2 result: gate still FAILED
+
+`JUDGE_PROMPT_V2` (your rubric wording, sentence-count anchors taken from the "2-3 sentences" ask, "be strict, choose the lower grade") run on the same 20 records, same judge model (`gemini-3.1-flash-lite`). v1 files are kept (`judge_outputs.jsonl`, `*_v1.backup.*`); v2 results are in `judge_outputs_v2.jsonl`, `calibration_report_v2.json`, `eval_report_v2.json`.
+
+| dimension | kappa v1 | kappa v2 | agreement v1 -> v2 |
+|---|---|---|---|
+| faithfulness | 0.07 | 0.04 | 50% -> 45% |
+| relevance | 0.00 | 0.00 | 85% -> 85% |
+| coherence | 0.00 | 0.00 | 70% -> 70% |
+| conciseness | 0.00 | 0.18 | 20% -> 30% |
+| **weighted avg** | **0.02** | **0.05** | |
+
+- The judge still gives 3 to all 20 on relevance and coherence, so those kappas are 0 by construction.
+- Conciseness improved a little (5x 2, 15x 3) but is still lenient: you scored 16 of 20 at 1 or 2.
+- Faithfulness got slightly worse. Verbosity r = -0.34 (p = 0.15, not significant, n = 20).
+- Conclusion: rewording the prompt did not fix this. The likely limit is the small judge model not following the strictness instruction, and/or a real gap between its notion of faithfulness and yours. Not yet tested: a stronger judge model.
+- Ideas, in order of cost: (1) same v2 prompt on a stronger model (e.g. `gemini-3.6-flash` or `gemini-3.1-pro-preview`), one-line change in `config.JUDGE_MODEL`; (2) measure conciseness deterministically (sentence count) instead of asking an LLM; (3) few-shot examples, which must come from outside these 20 or the kappa is inflated.
+- Do not put a Kappa on the resume from these runs.
+
+## Phase 3 — FINAL FINDING (accepted, decision by the project owner)
+
+**Weighted Cohen's kappa between the LLM judge and human labels is about 0.05. This is below the 0.4 gate and was accepted as the honest result rather than tuned further.**
+
+Two judge configurations on the same 20 human-labelled CI Brain summaries, prompt v2:
+
+| Judge model | Records judged | Weighted kappa |
+|---|---|---|
+| `gemini-3.1-flash-lite` | 20 of 20 | 0.05 |
+| `gemini-3.6-flash` | 12 of 20 (quota stopped the run) | 0.04 |
+
+Drivers:
+- **Systematic leniency on conciseness.** Humans scored 16 of 20 outputs 1 or 2 against the "2-3 sentences" ask. The judge scored most 3.
+- **Zero discrimination on relevance and coherence.** The judge gave 3 to every record on both, so those kappas are 0 by construction (a constant rater has no agreement beyond chance).
+- Faithfulness was the only dimension where the judge varied, and it agreed with humans no better than chance (kappa 0.04 and -0.05).
+- Human labels are themselves skewed (17/20 relevance = 3), so per-dimension kappas on n = 20 are noisy.
+
+What this does and does not support:
+- It does NOT support any claim that the judge agrees with humans. Do not put a Kappa figure on the resume as a success metric.
+- It supports: a working calibration pipeline that measured, and exposed, a lenient judge. Prompt v1 -> v2 and model lite -> 3.6-flash did not change that.
+- Verbosity bias: not significant (v1 r = 0.04; v2 r = -0.34, p = 0.15, n = 20). Position bias: detector unit-tested with a mock only, no real measurement.
+- Untried: a deterministic sentence-count check for conciseness; few-shot examples from outside the 20 labelled records.
+
+Files: v1 `reports/judge_outputs.jsonl` + `calibration_report.json`; v2 lite `*_v2.*`; v2 3.6-flash `*_v2_gemini-3.6-flash.*`.

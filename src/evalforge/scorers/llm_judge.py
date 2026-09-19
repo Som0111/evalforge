@@ -8,7 +8,12 @@ import time
 from google import genai
 from google.genai import errors, types
 
-from evalforge.config import JUDGE_MODEL, JUDGE_OUTPUTS_PATH
+from evalforge.config import (
+    JUDGE_MODEL,
+    JUDGE_OUTPUTS_PATH,
+    LEGACY_JUDGE_MODEL,
+    versioned_path,
+)
 
 _api_key = os.environ.get("GEMINI_API_KEY")
 if not _api_key:
@@ -18,7 +23,6 @@ _client = genai.Client(api_key=_api_key)
 log = logging.getLogger(__name__)
 
 DIMENSIONS = ("faithfulness", "relevance", "coherence", "conciseness")
-PROMPT_VERSION = "v1"
 RETRY_DELAY_S = 2.0  # multiplied by the attempt number for transient API errors
 
 # The 1-3 scale is deliberately identical to the human golden labels, so Cohen's Kappa
@@ -41,6 +45,36 @@ Rate the output on each dimension using ONLY the integer 1, 2, or 3:
 Respond ONLY with valid JSON. No explanation. No markdown. Example:
 {{"faithfulness": 3, "relevance": 2, "coherence": 3, "conciseness": 2}}
 """
+
+# v2: v1 scored 0.016 weighted kappa because the judge gave 3 to almost everything. This version uses the
+# human rubric wording, states the 2-3 sentence ask as concrete sentence-count anchors (taken from the ask
+# itself, not from the labelled data), and tells the judge to be strict.
+JUDGE_PROMPT_V2 = """You are a strict evaluator of an AI-generated summary of a software test failure.
+
+INPUT (the full prompt that was given to the AI, including its instructions):
+{input}
+
+OUTPUT (what the AI generated):
+{output}
+
+Grade the output on each dimension using ONLY the integer 1, 2, or 3 (1 = poor, 2 = acceptable, 3 = good).
+
+- faithfulness: sticks to the evidence shown in the input. No invented causes or details. Saying the evidence is too thin counts as faithful.
+  3 = every claim is supported by the input; 2 = goes beyond the evidence in places; 1 = invents facts.
+- relevance: answers the prompt with a root-cause hypothesis that is specific to this failure.
+  3 = specific to this failure; 2 = generic or only partly on target; 1 = off-topic.
+- coherence: clear and well structured.
+  3 = clear and well organised; 2 = readable but awkward or cluttered; 1 = hard to follow.
+- conciseness: respects the sentence limit the input asks for.
+  3 = within the requested length with no filler; 2 = slightly over (up to about twice the limit) or has preamble or formatting; 1 = far over the limit, several paragraphs, or headings and bullet lists.
+
+Be strict. Give 3 only when you cannot name a concrete flaw, and when torn between two grades choose the lower one. Do not reward length or a confident tone.
+
+Respond ONLY with valid JSON. No explanation. No markdown. Example:
+{{"faithfulness": 3, "relevance": 2, "coherence": 3, "conciseness": 2}}
+"""
+
+PROMPTS = {"v1": JUDGE_PROMPT_V1, "v2": JUDGE_PROMPT_V2}
 
 
 def _empty() -> dict:
@@ -93,18 +127,25 @@ def judge(input: str, output: str, prompt_template: str = JUDGE_PROMPT_V1, max_r
     return _empty()
 
 
-def run_judge_on_dataset(dataset: list[dict], prompt_template: str = JUDGE_PROMPT_V1, out_path=JUDGE_OUTPUTS_PATH) -> list[dict]:
+def judge_output_path(prompt_version: str, model: str | None = None):
+    return versioned_path(JUDGE_OUTPUTS_PATH, prompt_version, model or JUDGE_MODEL)
+
+
+def run_judge_on_dataset(dataset: list[dict], prompt_version: str = "v1", out_path=None) -> list[dict]:
     """Judge every record, appending judge_label + judge_prompt_version, and write JSONL.
 
     Resumable: the output file is appended to as we go, and ids already present are reused,
-    so a run cut short by the daily quota picks up where it stopped. All-None results are
-    skipped (warned, not written) so the next run retries them.
+    so a run cut short by the quota picks up where it stopped. All-None results are
+    skipped (warned, not written) so the next run retries them. Each (prompt version, judge model) has its own file.
     """
+    template = PROMPTS[prompt_version]
+    model = JUDGE_MODEL  # read at call time so a caller can override the module attribute
+    out_path = out_path or judge_output_path(prompt_version, model)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     done = {}
     if out_path.exists():
         with open(out_path, encoding="utf-8") as f:
-            done = {r["id"]: r for r in map(json.loads, filter(str.strip, f)) if r.get("judge_prompt_version") == PROMPT_VERSION}
+            done = {r["id"]: r for r in map(json.loads, filter(str.strip, f)) if r.get("judge_prompt_version") == prompt_version and r.get("judge_model", LEGACY_JUDGE_MODEL) == model}
 
     results = []
     with open(out_path, "a", encoding="utf-8") as f:
@@ -112,11 +153,11 @@ def run_judge_on_dataset(dataset: list[dict], prompt_template: str = JUDGE_PROMP
             if record["id"] in done:
                 results.append(done[record["id"]])
                 continue
-            label = judge(record["input"], record["output"], prompt_template)
+            label = judge(record["input"], record["output"], template)
             if all(v is None for v in label.values()):
                 log.warning("skipping %s: judge returned no scores", record["id"])
                 continue
-            out = {**record, "judge_label": label, "judge_prompt_version": PROMPT_VERSION}
+            out = {**record, "judge_label": label, "judge_prompt_version": prompt_version, "judge_model": model}
             f.write(json.dumps(out, ensure_ascii=False) + "\n")
             f.flush()
             results.append(out)

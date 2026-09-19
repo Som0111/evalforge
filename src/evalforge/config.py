@@ -13,8 +13,19 @@ JUDGE_OUTPUTS_PATH = REPORTS_DIR / "judge_outputs.jsonl"
 CALIBRATION_REPORT_PATH = REPORTS_DIR / "calibration_report.json"
 EVAL_REPORT_PATH = REPORTS_DIR / "eval_report.json"
 
-# Deliberately not gemini-3.5-flash (the model that wrote the summaries) to limit self-preference bias.
-JUDGE_MODEL = "gemini-3.1-flash-lite"
+# Judge model. Deliberately not gemini-3.5-flash (the model that wrote the summaries) to limit self-preference bias.
+JUDGE_MODEL = "gemini-3.6-flash"
+# Results from the first judge model live in the un-suffixed files, so they were never renamed or overwritten.
+LEGACY_JUDGE_MODEL = "gemini-3.1-flash-lite"
+
+
+def versioned_path(base: Path, version: str, model: str) -> Path:
+    """Where results for (prompt version, judge model) live. The legacy model keeps its original names."""
+    if model == LEGACY_JUDGE_MODEL:
+        suffix = "" if version == "v1" else f"_{version}"
+    else:
+        suffix = f"_{version}_{model}"
+    return base.with_name(f"{base.stem}{suffix}{base.suffix}")
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 SCORE_MIN = 1

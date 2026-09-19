@@ -9,6 +9,7 @@ dependencies = [
     "sentence-transformers",
     "google-genai",
     "scikit-learn",
+    "scipy",
 ]
 
 [project.optional-dependencies]
