@@ -33,3 +33,14 @@ Scale is 1–3 (1 = poor, 2 = acceptable, 3 = good). Do all 20 before resuming. 
 ## Scoring page (YOU)
 
 Open `data/raw/score_ci_brain.html` in a browser. Score all 20, click Export JSONL, and save the download as `data/golden/ci_brain_summaries.jsonl` (progress is kept in the browser if you close the tab).
+
+## Phase 2 — LLM judge (done, 39 tests pass, all mocked)
+
+- `scorers/llm_judge.py`: `JUDGE_PROMPT_V1`, `judge()` (retry, never raises), `run_judge_on_dataset()` (resumable, appends to `reports/judge_outputs.jsonl`).
+- Deviations from the roadmap, both forced:
+  - SDK is `google-genai`, not `google-generativeai` (the latter is end-of-life). `pyproject.toml` updated.
+  - `gemini-1.5-flash` no longer exists. `JUDGE_MODEL` is `gemini-3.1-flash-lite`: `gemini-2.5-flash` is closed to new users, and the summaries were written by `gemini-3.5-flash`, so a different model avoids self-preference bias.
+- The roadmap prompt's JSON example had unescaped braces that would crash `str.format`; they are doubled in the template.
+- A 429 (quota) returns all-None immediately instead of retrying. Re-running `run_judge_on_dataset` skips records already judged and retries the rest.
+- Smoke check on 2 real records (2 API calls): judge gave 3/3/3/3 where you gave 2/3/3/2. The judge looks more lenient than you; Phase 3 will quantify it.
+- Caveat: the judge prompt's dimension definitions are the roadmap's, not the rubric shown on the scoring page, so some disagreement is rubric mismatch, not judge error.

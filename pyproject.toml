@@ -7,7 +7,7 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "sentence-transformers",
-    "google-generativeai",
+    "google-genai",
     "scikit-learn",
 ]
 

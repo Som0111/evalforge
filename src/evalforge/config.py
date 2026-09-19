@@ -13,7 +13,8 @@ JUDGE_OUTPUTS_PATH = REPORTS_DIR / "judge_outputs.jsonl"
 CALIBRATION_REPORT_PATH = REPORTS_DIR / "calibration_report.json"
 EVAL_REPORT_PATH = REPORTS_DIR / "eval_report.json"
 
-JUDGE_MODEL = "gemini-1.5-flash"
+# Deliberately not gemini-3.5-flash (the model that wrote the summaries) to limit self-preference bias.
+JUDGE_MODEL = "gemini-3.1-flash-lite"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 SCORE_MIN = 1
