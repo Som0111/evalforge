@@ -34,5 +34,8 @@ SCORE_MAX = 3
 # Kappa < 0.4 fails the CI eval gate (see .github/workflows/ci.yml, Phase 5).
 MIN_WEIGHTED_KAPPA = 0.4
 
+# The CI gate refuses to judge agreement from an incomplete run (e.g. cut short by the API quota).
+MIN_JUDGE_COVERAGE = 0.9
+
 # A flip rate above this is considered a significant position bias (Phase 3.2).
 POSITION_BIAS_FLIP_THRESHOLD = 0.3

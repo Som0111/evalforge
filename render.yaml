@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: evalforge
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    # The Dockerfile CMD starts uvicorn on $PORT. The embedding model + torch need roughly 1 GB of RAM,
+    # so the free 512 MB tier is likely to run out of memory; use starter or larger.
+    plan: starter
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false          # set in the Render dashboard; never committed
+      - key: EVALFORGE_API_KEY
+        generateValue: true  # Render generates a random key; read it in the dashboard, send it as X-API-Key

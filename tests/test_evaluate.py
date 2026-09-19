@@ -1,6 +1,6 @@
 import json
 
-from evalforge.evaluate import run_full_eval
+from evalforge.evaluate import gate_failure, run_full_eval
 
 DIMS = ("faithfulness", "relevance", "coherence", "conciseness")
 
@@ -37,3 +37,21 @@ def test_report_written_with_expected_schema_and_coverage(tmp_path):
     assert report["scorer_averages"] == fake_score("", "")
     assert report["calibration"]["weighted_avg"] == 1.0  # judge copied the human labels
     assert "pearson_r" in report["bias"]["verbosity"]
+
+
+def report(kappa, coverage=1.0):
+    return {"judge_coverage": coverage, "calibration": {"weighted_avg": kappa}}
+
+
+def test_gate_passes_at_or_above_threshold():
+    assert gate_failure(report(0.4)) is None
+    assert gate_failure(report(0.9)) is None
+
+
+def test_gate_fails_below_threshold_and_when_kappa_missing():
+    assert "kappa" in gate_failure(report(0.05))
+    assert "kappa" in gate_failure(report(None))
+
+
+def test_gate_refuses_verdict_on_incomplete_run():
+    assert "coverage" in gate_failure(report(0.9, coverage=0.6))

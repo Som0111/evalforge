@@ -2,9 +2,11 @@
 import json
 import logging
 import os
+import secrets
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.responses import RedirectResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
 from evalforge.config import (
@@ -20,6 +22,18 @@ log = logging.getLogger(__name__)
 
 MAX_BATCH = 50
 API_PROMPT_VERSION = "v2"  # the stricter prompt from Phase 3; see HUMAN_GUIDE.md for how well it agrees with humans
+
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def require_api_key(key: str | None = Security(_api_key_header)) -> None:
+    """Guards the endpoints that can spend judge quota. Fails closed if no server key is configured."""
+    expected = os.environ.get("EVALFORGE_API_KEY")
+    if not expected:
+        raise HTTPException(503, "EVALFORGE_API_KEY is not configured on the server")
+    if not key or not secrets.compare_digest(key.encode(), expected.encode()):
+        raise HTTPException(401, "missing or invalid X-API-Key")
+
 
 app = FastAPI(title="EvalForge", description="Rule-based, embedding and LLM-judge scoring of LLM outputs.")
 
@@ -115,12 +129,12 @@ def report() -> dict:
         return {"error": "report could not be read"}
 
 
-@app.post("/evaluate")
+@app.post("/evaluate", dependencies=[Depends(require_api_key)])
 def evaluate(req: EvaluateRequest) -> EvaluateResponse:
     return _evaluate(req.input, req.output, req.reference)[0]
 
 
-@app.post("/evaluate/batch")
+@app.post("/evaluate/batch", dependencies=[Depends(require_api_key)])
 def evaluate_batch(req: BatchRequest) -> BatchResponse:
     # Sequential: each judge call is a network round trip, so a full batch of 50 can take a while.
     outcomes = [_evaluate(item.input, item.output) for item in req.items]

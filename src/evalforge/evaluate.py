@@ -11,6 +11,7 @@ from evalforge.config import (
     CALIBRATION_REPORT_PATH,
     EVAL_REPORT_PATH,
     GOLDEN_DATASET_PATH,
+    MIN_JUDGE_COVERAGE,
     MIN_WEIGHTED_KAPPA,
     versioned_path,
 )
@@ -67,16 +68,38 @@ def run_full_eval(
     return report
 
 
-if __name__ == "__main__":
+def gate_failure(report: dict) -> str | None:
+    """Why the CI quality gate should fail for this report, or None if it passes."""
+    if report["judge_coverage"] < MIN_JUDGE_COVERAGE:
+        return f"judge coverage {report['judge_coverage']:.2f} < {MIN_JUDGE_COVERAGE}: incomplete run, no verdict"
+    kappa = report["calibration"]["weighted_avg"]
+    if kappa is None or kappa < MIN_WEIGHTED_KAPPA:
+        return f"weighted kappa {kappa} < {MIN_WEIGHTED_KAPPA}"
+    return None
+
+
+def main(argv: list[str]) -> int:
+    """`python -m evalforge.evaluate [version [model]] [--gate]`; with --gate, exit 1 if the gate fails."""
     from evalforge.scorers import llm_judge  # needs GEMINI_API_KEY
 
-    version = sys.argv[1] if len(sys.argv) > 1 else "v1"  # `python -m evalforge.evaluate v2 [model]`
-    if len(sys.argv) > 2:
-        llm_judge.JUDGE_MODEL = sys.argv[2]
+    gate = "--gate" in argv
+    args = [a for a in argv if a != "--gate"]
+    version = args[0] if args else "v1"
+    if len(args) > 1:
+        llm_judge.JUDGE_MODEL = args[1]
     model = llm_judge.JUDGE_MODEL
     logging.basicConfig(level=logging.WARNING)
-    print(json.dumps(run_full_eval(
+    report = run_full_eval(
         output_path=versioned_path(EVAL_REPORT_PATH, version, model),
         calibration_path=versioned_path(CALIBRATION_REPORT_PATH, version, model),
         prompt_version=version,
-    ), indent=2))
+    )
+    print(json.dumps(report, indent=2))
+    failure = gate_failure(report) if gate else None
+    if failure:
+        print(f"GATE FAILED: {failure}", file=sys.stderr)
+    return 1 if failure else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

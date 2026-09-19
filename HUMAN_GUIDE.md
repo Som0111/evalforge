@@ -113,3 +113,12 @@ What this does and does not support:
 - Untried: a deterministic sentence-count check for conciseness; few-shot examples from outside the 20 labelled records.
 
 Files: v1 `reports/judge_outputs.jsonl` + `calibration_report.json`; v2 lite `*_v2.*`; v2 3.6-flash `*_v2_gemini-3.6-flash.*`.
+
+## Phase 4 — FastAPI service (done, 73 tests pass)
+
+Run: `uvicorn evalforge.api:app --reload` (set `GEMINI_API_KEY` to enable the judge; without it `judge` is `null` and scores still return).
+- `GET /health`, `GET /report` (newest `reports/eval_report*.json`, backups excluded), `POST /evaluate`, `POST /evaluate/batch` (1-50 items, 422 outside that).
+- The judge uses prompt `v2`. Given the ~0.05 kappa above, treat the `judge` field as an unvalidated, lenient signal.
+- Empty `input`/`output` scores 0.0 and is never sent to the judge. `failed` in the batch response counts judge attempts that returned nothing.
+- Before deploying (Phase 5): the endpoints are unauthenticated and each judged request spends Gemini quota, so add an API key or rate limit first. Batch judging is sequential and can be slow. The embedding model loads on the first scored request, not at startup.
+- Tests use Starlette's `TestClient` rather than `httpx.AsyncClient` (same httpx underneath, no async plugin needed).

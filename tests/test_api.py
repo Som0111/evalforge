@@ -10,8 +10,18 @@ GOOD = dict.fromkeys(DIMS, 3)
 BODY = {"input": "Nine tests failed in dicttoolz merge.", "output": "The merge function likely drops keys."}
 
 
+API_KEY = "test-api-key"
+
+
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    monkeypatch.setenv("EVALFORGE_API_KEY", API_KEY)
+    return TestClient(api.app, headers={"X-API-Key": API_KEY})
+
+
+@pytest.fixture
+def anon(monkeypatch):
+    monkeypatch.setenv("EVALFORGE_API_KEY", API_KEY)
     return TestClient(api.app)
 
 
@@ -125,3 +135,25 @@ def test_batch_counts_judge_failures_but_keeps_rule_scores(client, monkeypatch):
     body = client.post("/evaluate/batch", json={"items": items}).json()
     assert body["failed"] == 1 and body["total"] == 2
     assert body["results"][1]["judge"] is None and "length" in body["results"][1]["scores"]
+
+
+@pytest.mark.parametrize("path,body", [("/evaluate", BODY), ("/evaluate/batch", {"items": [BODY]})])
+def test_protected_endpoints_reject_missing_and_wrong_key(anon, path, body):
+    assert anon.post(path, json=body).status_code == 401
+    assert anon.post(path, json=body, headers={"X-API-Key": "wrong"}).status_code == 401
+    assert anon.post(path, json={}).status_code == 401  # auth is checked before validation
+
+
+def test_correct_key_is_accepted(anon, no_key):
+    assert anon.post("/evaluate", json=BODY, headers={"X-API-Key": API_KEY}).status_code == 200
+
+
+def test_server_without_configured_key_fails_closed(monkeypatch):
+    monkeypatch.delenv("EVALFORGE_API_KEY", raising=False)
+    r = TestClient(api.app).post("/evaluate", json=BODY, headers={"X-API-Key": "anything"})
+    assert r.status_code == 503
+
+
+def test_health_and_report_stay_open(anon):
+    assert anon.get("/health").status_code == 200
+    assert anon.get("/report").status_code == 200
