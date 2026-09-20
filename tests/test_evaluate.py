@@ -55,3 +55,9 @@ def test_gate_fails_below_threshold_and_when_kappa_missing():
 
 def test_gate_refuses_verdict_on_incomplete_run():
     assert "coverage" in gate_failure(report(0.9, coverage=0.6))
+
+
+def test_gate_threshold_is_overridable():
+    assert gate_failure(report(0.053), min_kappa=0.05) is None
+    assert gate_failure(report(0.04), min_kappa=0.05) is not None
+    assert gate_failure(report(0.053)) is not None  # the default (0.4) is unchanged

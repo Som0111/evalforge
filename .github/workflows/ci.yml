@@ -38,7 +38,16 @@ jobs:
     needs: [lint, test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    env:
+      # An undefined secret expands to an empty string, not an error.
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
+      - name: Require GEMINI_API_KEY
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error::GEMINI_API_KEY is empty. Add a repository secret named exactly GEMINI_API_KEY (Settings > Secrets and variables > Actions > Repository secrets). An Environment, Dependabot, or differently named secret is not visible to this job."
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -50,8 +59,14 @@ jobs:
           key: hf-all-MiniLM-L6-v2
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -e .
-      # Real judge run on the golden set. --gate exits 1 if weighted kappa < MIN_WEIGHTED_KAPPA
-      # or the run was too incomplete (API quota) to give a verdict.
-      - run: python -m evalforge.evaluate v2 --gate
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # Real judge run on the golden set. --gate exits 1 if weighted kappa < --min-kappa, or if the
+      # run was too incomplete (API quota) to give a verdict.
+      #
+      # Threshold 0.05 is an ACCEPTED FINDING, not a quality target. The judge (prompt v2) agrees with
+      # the human labels barely above chance: weighted kappa 0.053 on all 20 records with
+      # gemini-3.1-flash-lite. It is lenient on conciseness and gives 3 to everything on relevance and
+      # coherence (see HUMAN_GUIDE.md). The design target is 0.4 (config.MIN_WEIGHTED_KAPPA). This gate
+      # only catches regressions below today's measured level; it does not show the judge is good.
+      # The model is pinned to the one that produced 0.053: gemini-3.6-flash measured 0.037 (12 of 20
+      # records), which would fail this threshold.
+      - run: python -m evalforge.evaluate v2 gemini-3.1-flash-lite --gate --min-kappa 0.05

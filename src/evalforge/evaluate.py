@@ -1,4 +1,5 @@
 """Run full eval pipeline, write report (Phase 3.4)."""
+import argparse
 import functools
 import json
 import logging
@@ -68,34 +69,38 @@ def run_full_eval(
     return report
 
 
-def gate_failure(report: dict) -> str | None:
+def gate_failure(report: dict, min_kappa: float = MIN_WEIGHTED_KAPPA) -> str | None:
     """Why the CI quality gate should fail for this report, or None if it passes."""
     if report["judge_coverage"] < MIN_JUDGE_COVERAGE:
         return f"judge coverage {report['judge_coverage']:.2f} < {MIN_JUDGE_COVERAGE}: incomplete run, no verdict"
     kappa = report["calibration"]["weighted_avg"]
-    if kappa is None or kappa < MIN_WEIGHTED_KAPPA:
-        return f"weighted kappa {kappa} < {MIN_WEIGHTED_KAPPA}"
+    if kappa is None or kappa < min_kappa:
+        return f"weighted kappa {kappa} < {min_kappa}"
     return None
 
 
 def main(argv: list[str]) -> int:
-    """`python -m evalforge.evaluate [version [model]] [--gate]`; with --gate, exit 1 if the gate fails."""
+    """`python -m evalforge.evaluate [version [model]] [--gate [--min-kappa X]]`; --gate exits 1 if the gate fails."""
     from evalforge.scorers import llm_judge  # needs GEMINI_API_KEY
 
-    gate = "--gate" in argv
-    args = [a for a in argv if a != "--gate"]
-    version = args[0] if args else "v1"
-    if len(args) > 1:
-        llm_judge.JUDGE_MODEL = args[1]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("version", nargs="?", default="v1")
+    parser.add_argument("model", nargs="?")
+    parser.add_argument("--gate", action="store_true")
+    parser.add_argument("--min-kappa", type=float, default=MIN_WEIGHTED_KAPPA)
+    args = parser.parse_args(argv)
+
+    if args.model:
+        llm_judge.JUDGE_MODEL = args.model
     model = llm_judge.JUDGE_MODEL
     logging.basicConfig(level=logging.WARNING)
     report = run_full_eval(
-        output_path=versioned_path(EVAL_REPORT_PATH, version, model),
-        calibration_path=versioned_path(CALIBRATION_REPORT_PATH, version, model),
-        prompt_version=version,
+        output_path=versioned_path(EVAL_REPORT_PATH, args.version, model),
+        calibration_path=versioned_path(CALIBRATION_REPORT_PATH, args.version, model),
+        prompt_version=args.version,
     )
     print(json.dumps(report, indent=2))
-    failure = gate_failure(report) if gate else None
+    failure = gate_failure(report, args.min_kappa) if args.gate else None
     if failure:
         print(f"GATE FAILED: {failure}", file=sys.stderr)
     return 1 if failure else 0
