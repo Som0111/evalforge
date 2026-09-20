@@ -69,10 +69,10 @@ def run_full_eval(
     return report
 
 
-def gate_failure(report: dict, min_kappa: float = MIN_WEIGHTED_KAPPA) -> str | None:
+def gate_failure(report: dict, min_kappa: float = MIN_WEIGHTED_KAPPA, min_coverage: float = MIN_JUDGE_COVERAGE) -> str | None:
     """Why the CI quality gate should fail for this report, or None if it passes."""
-    if report["judge_coverage"] < MIN_JUDGE_COVERAGE:
-        return f"judge coverage {report['judge_coverage']:.2f} < {MIN_JUDGE_COVERAGE}: incomplete run, no verdict"
+    if report["judge_coverage"] < min_coverage:
+        return f"judge coverage {report['judge_coverage']:.2f} < {min_coverage}: incomplete run, no verdict"
     kappa = report["calibration"]["weighted_avg"]
     if kappa is None or kappa < min_kappa:
         return f"weighted kappa {kappa} < {min_kappa}"
@@ -80,7 +80,7 @@ def gate_failure(report: dict, min_kappa: float = MIN_WEIGHTED_KAPPA) -> str | N
 
 
 def main(argv: list[str]) -> int:
-    """`python -m evalforge.evaluate [version [model]] [--gate [--min-kappa X]]`; --gate exits 1 if the gate fails."""
+    """`python -m evalforge.evaluate [version [model]] [--gate [--min-kappa X] [--min-coverage Y]]`; --gate exits 1 if the gate fails."""
     from evalforge.scorers import llm_judge  # needs GEMINI_API_KEY
 
     parser = argparse.ArgumentParser()
@@ -88,6 +88,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("model", nargs="?")
     parser.add_argument("--gate", action="store_true")
     parser.add_argument("--min-kappa", type=float, default=MIN_WEIGHTED_KAPPA)
+    parser.add_argument("--min-coverage", type=float, default=MIN_JUDGE_COVERAGE)
     args = parser.parse_args(argv)
 
     if args.model:
@@ -100,7 +101,7 @@ def main(argv: list[str]) -> int:
         prompt_version=args.version,
     )
     print(json.dumps(report, indent=2))
-    failure = gate_failure(report, args.min_kappa) if args.gate else None
+    failure = gate_failure(report, args.min_kappa, args.min_coverage) if args.gate else None
     if failure:
         print(f"GATE FAILED: {failure}", file=sys.stderr)
     return 1 if failure else 0

@@ -139,3 +139,15 @@ Steps for you:
 4. Write the live URL here: ______
 5. Test: `curl -X POST <url>/evaluate -H "X-API-Key: <key>" -H "content-type: application/json" -d '{"input": "...", "output": "..."}'` and check `judge` is non-null.
 - Port 8000 on this machine was already taken by another service, so local container tests used 8765.
+
+## CI eval-gate thresholds (accepted, decision by the project owner)
+
+The CI gate (`python -m evalforge.evaluate v2 gemini-3.1-flash-lite --gate --min-kappa 0.05 --min-coverage 0.75`) uses two relaxed thresholds. The design defaults in `config.py` are unchanged (kappa 0.4, coverage 0.9).
+
+- **Kappa 0.05** (default 0.4): accepted finding, see "Phase 3 - FINAL FINDING". Judge agreement with humans is barely above chance (0.053 on all 20 records). The gate catches regressions below today's level; it does not show the judge is good.
+- **Judge coverage 0.75** (default 0.9): the Gemini free-tier quota consistently stops a run at about 16 of 20 records (0.8). At 0.9 the gate would fail on quota alone, so it is lowered so that 16/20 passes while 12/20 (0.6) still fails as too incomplete.
+
+Consequences to know about:
+- The kappa verdict is computed on the records that were judged, usually the first 16 (`cb_001` to `cb_016`); the last few may never be judged in CI. On the first 16, lite/v2 kappa is 0.096 (vs 0.053 on all 20), so the subset is not identical to the full-set number.
+- It is a weaker check than the 20-record run. To restore full coverage, use a paid API tier, or make the runner wait out the quota and retry the missing records.
+- The model is pinned to `gemini-3.1-flash-lite` in the workflow because that is what produced the 0.053; the API service uses `gemini-3.6-flash`.

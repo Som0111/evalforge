@@ -61,3 +61,9 @@ def test_gate_threshold_is_overridable():
     assert gate_failure(report(0.053), min_kappa=0.05) is None
     assert gate_failure(report(0.04), min_kappa=0.05) is not None
     assert gate_failure(report(0.053)) is not None  # the default (0.4) is unchanged
+
+
+def test_coverage_threshold_is_overridable():
+    assert gate_failure(report(0.9, coverage=0.8), min_coverage=0.75) is None  # 16 of 20
+    assert "coverage" in gate_failure(report(0.9, coverage=0.6), min_coverage=0.75)  # 12 of 20
+    assert "coverage" in gate_failure(report(0.9, coverage=0.8))  # default 0.9 unchanged
