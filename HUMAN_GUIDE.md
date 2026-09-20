@@ -151,3 +151,50 @@ Consequences to know about:
 - The kappa verdict is computed on the records that were judged, usually the first 16 (`cb_001` to `cb_016`); the last few may never be judged in CI. On the first 16, lite/v2 kappa is 0.096 (vs 0.053 on all 20), so the subset is not identical to the full-set number.
 - It is a weaker check than the 20-record run. To restore full coverage, use a paid API tier, or make the runner wait out the quota and retry the missing records.
 - The model is pinned to `gemini-3.1-flash-lite` in the workflow because that is what produced the 0.053; the API service uses `gemini-3.6-flash`.
+
+## Phase 6 — Resume bullets
+
+Numbers below come from `reports/` and the test suite (83 tests, 11 files). They are written to be defensible in an interview: the honest framing of a negative result, not a claimed success.
+
+```latex
+\resumeItem{Engineered an \textbf{LLM-as-judge evaluation pipeline} scoring outputs on faithfulness, relevance, coherence, and conciseness with a calibration harness (quadratic-weighted Cohen's Kappa) against human annotations on \textbf{20 examples}; it measured judge-human agreement of only \textbf{$\kappa \approx 0.05$}, diagnosing systematic leniency (every relevance and coherence score a 3) and showing a prompt rewrite and a model swap did not fix it.}
+\resumeItem{Designed \textbf{judge bias checks}: measured verbosity bias as the Pearson correlation between output length and judge score ($r = -0.34$, $p = 0.15$, not significant, $n = 20$), and built a position-bias detector (flip rate across swapped pairs, unit-tested with a mock judge).}
+\resumeItem{Built \textbf{83 tests} covering scorer contracts, judge retry and parsing, resumable batch runs, calibration math, and API auth and schema validation; a \textbf{CI quality gate} fails the build if weighted judge-human kappa drops below 0.05 or fewer than 75\% of records are judged.}
+\resumeItem{Built a \textbf{Dockerised FastAPI service} with API-key-protected single and batch evaluation endpoints, health and report endpoints, and the embedding model baked into the image for instant startup, run locally against CI Brain's failure summaries.}
+```
+
+Before you use them:
+- **Bullet 4 says "Built", not "Deployed", on purpose.** Nothing is live yet. After a real Render deploy and a judged `/evaluate` call, change it to "Deployed ... live on Render" and add the URL to the guide.
+- **Bullet 3 says "fails the build"**, not "blocks deploys": Render is not wired to wait for GitHub Actions. Also, the workflow has not run on GitHub yet; confirm it went green before claiming the gate works. Update the 83 if the test count changes.
+- Bullet 1 does not claim the judge agrees with humans, because it does not. Do not change it to "achieving Kappa of X" as a success metric.
+- Bullet 2: position bias was NOT run on a real judge. Do not say you measured a flip rate.
+
+## Phase 6 — Interview questions
+
+**1. What is Cohen's Kappa and why is it better than raw percentage agreement?**
+Kappa = (observed agreement - expected agreement by chance) / (1 - expected agreement). It asks how much two raters agree beyond what their label frequencies alone would produce. Percentage agreement can be high just because one label is common. My own data shows it: relevance had 85% exact agreement but kappa 0.00, because 17 of 20 human labels were 3 and the judge said 3 every time. I used the quadratic-weighted version because the scores are ordinal (1 < 2 < 3), so a 1-vs-3 miss counts more than a 2-vs-3 miss. Rough scale: below 0.2 poor, 0.2-0.4 fair, 0.4-0.6 moderate, 0.6-0.8 substantial, above 0.8 near-perfect. Mine is about 0.05.
+
+**2. What is position bias in LLM judges? How did you detect it?**
+When a judge compares two outputs, it tends to favour whichever is shown first (or second), regardless of quality. To detect it, present each pair in both orders and check whether the judge's preferred output stays the same; if it picks the same slot both times, the preferred output flipped, which signals position bias. `detect_position_bias` computes the flip rate and flags it above 0.3, and refuses to run on fewer than 10 pairs. Honest status: it is implemented and unit-tested with a mock judge only. I never built a pairwise judge prompt, so I have no real flip rate, and I do not claim one.
+
+**3. Why did you use a 1-3 scale instead of 1-5?**
+Fewer levels are easier to annotate consistently, so less label noise, and the judge answers the same integers so kappa needs no remapping. The trade-off showed up in my data: with only three levels the labels bunched up (17 of 20 relevance labels were 3), which leaves kappa little to work with. A 1-5 scale would give more resolution but usually lowers annotator consistency, and with one annotator and 20 examples I could not have validated that.
+
+**4. What does your CI quality gate check? What happens if it fails?**
+On push to `main`, after lint and tests pass, it runs the real judge on the golden set and computes weighted kappa. It fails the job (non-zero exit) if kappa is below 0.05 or if fewer than 75% of records were judged, since a partial run gives no reliable verdict. Both thresholds are relaxed on purpose: 0.05 equals today's measured level, so the gate is a regression guard and not proof of quality (the design target is 0.4), and 0.75 accommodates the free-tier quota that stops runs at about 16 of 20. A failure means the pipeline goes red; it does not by itself stop Render from deploying. The workflow has not run on GitHub yet.
+
+**5. Why is `judge_coverage` tracked? What does a low coverage signal?**
+It is the fraction of records the judge returned usable scores for. Records with no score are dropped, so the kappa only describes the rest; if the failures cluster on hard or unusual inputs, the kappa is optimistic. In principle a low value can signal unparseable judge output, refusals, or API problems. In my runs the cause was purely the API quota (429 errors), not hard cases, and I did not test whether the failures were biased. The gate therefore refuses to give a verdict below 75%.
+
+**6. What is the difference between faithfulness and relevance in your scoring dimensions?**
+Faithfulness asks whether the summary sticks to the evidence in the input (no invented causes or details; saying the evidence is too thin counts as faithful). Relevance asks whether it answers what was asked: a root-cause hypothesis specific to this failure. A summary can be faithful but irrelevant (accurate restatement, no hypothesis) or relevant but unfaithful (a confident cause the evidence does not support). Faithfulness was the only dimension where the judge varied at all.
+
+**7. Why was `all-MiniLM-L6-v2` chosen over a larger embedding model?**
+It is small (about 80 MB, 384-dimensional), fast on CPU, and easy to bake into a Docker image so the service starts instantly, which fits a cheap hosting tier. I did not benchmark larger models, so I cannot claim it is the most accurate. It also truncates long inputs (around 256 word pieces), which matters for long CI prompts. Its relevance scores on my data ranged 0.28 to 0.69, mean 0.53, and they were not validated against the human labels.
+
+**8. What would a production upgrade of this system look like?**
+- Fix the judge first: it is lenient, so try a deterministic sentence-count check for conciseness, few-shot examples from held-out records, and a stronger or multiple judge models as an ensemble.
+- Get more and better labels: a larger set, at least two annotators to measure inter-annotator agreement (my single annotator's labels are themselves unvalidated), and an online annotation tool.
+- A third split for threshold search, so tuning the prompt does not overfit the calibration set.
+- Drift monitoring on score distributions in production, plus a real measured position-bias test.
+- Paid API quota so runs are complete and the CI gate judges all records; make the deploy wait for CI.
