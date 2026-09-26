@@ -76,14 +76,16 @@ def test_evaluate_valid_input(client, judge_ok):
     r = client.post("/evaluate", json={**BODY, "reference": BODY["output"]})
     assert r.status_code == 200
     body = r.json()
-    assert {"length", "keyword_overlap", "format", "relevance", "semantic_sim"} <= set(body["scores"])
-    assert all(0.0 <= v <= 1.0 for v in body["scores"].values())
+    assert {"length", "keyword_overlap", "format"} <= set(body["rule_based"])
+    assert {"relevance", "semantic_sim"} <= set(body["semantic"])
+    assert all(0.0 <= v <= 1.0 for v in {**body["rule_based"], **body["semantic"]}.values())
     assert body["judge"] == GOOD
-    assert body["judge_prompt_version"] == "v2"
+    assert body["metadata"]["judge_prompt_version"] == "v2"
+    assert body["metadata"]["judge_failed"] is False
 
 
 def test_evaluate_without_reference_omits_semantic_sim(client, judge_ok):
-    assert "semantic_sim" not in client.post("/evaluate", json=BODY).json()["scores"]
+    assert "semantic_sim" not in client.post("/evaluate", json=BODY).json()["semantic"]
 
 
 def test_evaluate_missing_output_is_422(client):
@@ -94,7 +96,8 @@ def test_evaluate_without_api_key_returns_null_judge_and_scores(client, no_key):
     r = client.post("/evaluate", json=BODY)
     assert r.status_code == 200
     assert r.json()["judge"] is None
-    assert r.json()["scores"]["length"] >= 0
+    assert r.json()["metadata"]["judge_failed"] is False  # judge was skipped, not attempted
+    assert r.json()["rule_based"]["length"] >= 0
 
 
 def test_judge_failure_returns_scores_with_null_judge(client, monkeypatch):
@@ -102,6 +105,7 @@ def test_judge_failure_returns_scores_with_null_judge(client, monkeypatch):
     monkeypatch.setattr(api, "_run_judge", lambda i, o: None)
     r = client.post("/evaluate", json=BODY)
     assert r.status_code == 200 and r.json()["judge"] is None
+    assert r.json()["metadata"]["judge_failed"] is True
 
 
 def test_batch_of_three(client, judge_ok):
@@ -124,7 +128,8 @@ def test_batch_empty_output_scores_zero_and_skips_judge(client, monkeypatch):
     body = client.post("/evaluate/batch", json={"items": items}).json()
     empty = body["results"][1]
     assert empty["judge"] is None
-    assert empty["scores"]["length"] == empty["scores"]["format"] == empty["scores"]["relevance"] == 0.0
+    assert empty["rule_based"]["length"] == empty["rule_based"]["format"] == 0.0
+    assert empty["semantic"]["relevance"] == 0.0
     assert calls == [BODY["output"]]
 
 
@@ -134,7 +139,7 @@ def test_batch_counts_judge_failures_but_keeps_rule_scores(client, monkeypatch):
     items = [BODY, {"input": "in", "output": "bad output here"}]
     body = client.post("/evaluate/batch", json={"items": items}).json()
     assert body["failed"] == 1 and body["total"] == 2
-    assert body["results"][1]["judge"] is None and "length" in body["results"][1]["scores"]
+    assert body["results"][1]["judge"] is None and "length" in body["results"][1]["rule_based"]
 
 
 @pytest.mark.parametrize("path,body", [("/evaluate", BODY), ("/evaluate/batch", {"items": [BODY]})])
@@ -157,3 +162,17 @@ def test_server_without_configured_key_fails_closed(monkeypatch):
 def test_health_and_report_stay_open(anon):
     assert anon.get("/health").status_code == 200
     assert anon.get("/report").status_code == 200
+
+
+def test_demo_page_serves_html_without_auth(anon):
+    r = anon.get("/demo")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "/evaluate" in r.text
+
+
+def test_openapi_schema_generates(client):
+    r = client.get("/openapi.json")
+    assert r.status_code == 200
+    schema = r.json()
+    assert {"/health", "/report", "/evaluate", "/evaluate/batch"} <= set(schema["paths"])

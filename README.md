@@ -1,8 +1,41 @@
 # EvalForge
 
-EvalForge scores the text an LLM writes and checks whether those scores can be trusted. Given an input and an LLM-written output, it computes simple rule-based checks (length, keyword overlap, formatting), a semantic similarity score from a sentence-embedding model, and a 1-3 rating on four dimensions (faithfulness, relevance, coherence, conciseness) from a second LLM acting as judge. It then compares the judge's ratings with a human's ratings of the same outputs, so you can see how far the judge deserves to be believed. The demo dataset is 20 failure summaries written by CI Brain, this author's test-failure triage project.
+**A pipeline that scores LLM outputs and then checks whether its own judge can be trusted — and finds, honestly, that it mostly can't yet.**
 
-**The headline result is negative: on this dataset the judge agrees with the human labels only slightly better than chance (weighted kappa about 0.05).** The pipeline that measured this is the useful part of the project. See [Results](#results) and [Limitations](#honest-limitations).
+Given an input and an LLM-written output, EvalForge computes rule-based checks (length, keyword overlap, formatting), a semantic similarity score from a sentence-embedding model, and a 1-3 rating on four dimensions (faithfulness, relevance, coherence, conciseness) from a second LLM acting as judge. It then compares the judge's ratings against a human's ratings of the same outputs, so you can see how far the judge deserves to be believed. The demo dataset is 20 real failure summaries written by CI Brain, this author's test-failure triage project.
+
+**The headline result is negative: on this dataset the judge agrees with the human labels only slightly better than chance (weighted kappa about 0.05).** The pipeline that measured this — not a passing judge score — is the useful part of the project. See [Results](#results) and [Limitations](#honest-limitations).
+
+## Why EvalForge
+
+"LLM-as-judge" is the default way teams check LLM output at scale, but a judge that hasn't been checked against humans is a guess wearing a number. EvalForge is a small, self-contained framework for running that check: score outputs several ways, calibrate the judge against real human labels, and look for the two biases (verbosity, position) that most commonly make a judge look better than it is.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A[Input + LLM Output] --> B[Rule-based Scorers]
+    A --> C[Embedding Scorer]
+    A --> D[LLM Judge]
+    D --> E[Calibration vs Human Labels]
+    D --> F[Bias Detection]
+    B --> G[Evaluation Report]
+    C --> G
+    E --> G
+    F --> G
+```
+
+Rule-based and embedding scorers run on every request. The judge, calibration, and bias detection are the pipeline this project is actually about — everything downstream of the judge exists to say how much to trust it.
+
+## Key capabilities
+
+- Rule-based scoring: length, TF-IDF keyword overlap, format checks
+- Semantic similarity via `sentence-transformers` (`all-MiniLM-L6-v2`)
+- LLM-as-judge (Gemini) on 4 dimensions, versioned prompts, resumable batch runs
+- Judge calibration against human labels via quadratic-weighted Cohen's kappa
+- Verbosity and position bias detection
+- FastAPI service with single and batch evaluation endpoints
+- CI eval gate that fails a push if judge agreement or coverage regresses
 
 ## Results
 
@@ -52,16 +85,39 @@ python -m evalforge.evaluate v2 --gate --min-kappa 0.05 --min-coverage 0.75   # 
 
 Docker: `docker build -t evalforge . && docker run -p 8000:8000 -e EVALFORGE_API_KEY=secret evalforge`.
 
+## Tech stack
+
+Python 3.11, FastAPI, `sentence-transformers`, Gemini API (`google-genai`), scikit-learn (Cohen's kappa), SciPy (Pearson correlation), pytest, Docker, GitHub Actions, Render.
+
+## Project structure
+
+```
+src/evalforge/
+├── config.py          paths, model names, thresholds
+├── dataset.py          golden dataset loader and validator
+├── scorers/
+│   ├── rule_based.py   length, keyword overlap, format checks
+│   ├── embedding.py     semantic similarity via sentence-transformers
+│   └── llm_judge.py    Gemini-as-judge with versioned prompts
+├── calibration.py      judge vs human agreement (Cohen's kappa)
+├── bias.py             position and verbosity bias detection
+├── evaluate.py          full eval pipeline, writes reports/eval_report.json
+└── api.py               FastAPI app
+data/golden/              20 human-annotated examples
+reports/                  eval reports and calibration output
+tests/                    pytest suite
+```
+
 ## API reference
 
 | Method and path | Auth | What it does |
 |---|---|---|
 | `GET /health` | none | Status, golden dataset size, embedding model, judge model |
 | `GET /report` | none | Most recent `reports/eval_report*.json`, or `{"error": "no report found"}` |
-| `POST /evaluate` | `X-API-Key` | Body `{input, output, reference?}`. Returns `scores`, `judge` (1-3 per dimension, or `null`), `judge_prompt_version`, `judge_model` |
-| `POST /evaluate/batch` | `X-API-Key` | Body `{items: [{input, output}]}`, 1 to 50 items. Returns `results`, `total`, `failed` (judge attempts that returned nothing) |
+| `POST /evaluate` | `X-API-Key` | Body `{input, output, reference?}`. Returns `rule_based` (length, keyword_overlap, format), `semantic` (relevance, semantic_sim if `reference` given), `judge` (1-3 per dimension, or `null`), `metadata` (judge_prompt_version, judge_model, judge_failed) |
+| `POST /evaluate/batch` | `X-API-Key` | Body `{items: [{input, output}]}`, 1 to 50 items. Returns `results` (each shaped like `/evaluate`), `total`, `failed` (judge attempts that returned nothing) |
 
-Missing or wrong `X-API-Key` returns 401; a server with no `EVALFORGE_API_KEY` set returns 503 (fails closed). Without `GEMINI_API_KEY` the judge is skipped and `judge` is `null`. Empty text scores 0.0 and is never sent to the judge.
+Missing or wrong `X-API-Key` returns 401; a server with no `EVALFORGE_API_KEY` set returns 503 (fails closed). Without `GEMINI_API_KEY` the judge is skipped, `judge` is `null`, and `judge_failed` is `false` (skipped, not attempted). Empty text scores 0.0 and is never sent to the judge.
 
 ## CI
 
@@ -77,4 +133,10 @@ Missing or wrong `X-API-Key` returns 401; a server with no `EVALFORGE_API_KEY` s
 - **Keyword overlap is crude.** TF-IDF keywords from CI prompts are mostly test identifiers, so it rewards repeating test names.
 - **Free-tier API quota** stops full runs; the CI gate therefore judges a subset.
 - **Not yet deployed.** `render.yaml` and the Dockerfile are ready and the image builds and runs locally; there is no live URL yet.
-- **Untried fixes:** a deterministic sentence-count check for conciseness, and few-shot examples from records outside the 20.
+
+## Future improvements
+
+- A deterministic sentence-count check for conciseness
+- Few-shot examples in the judge prompt, drawn from records outside the 20
+- Run position bias detection against a real judge (currently mocked-only)
+- A second human annotator to validate the golden labels themselves
