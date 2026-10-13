@@ -70,7 +70,7 @@ Scorer averages over the 20 outputs (no human labels involved): length 0.96, key
 ## Quickstart
 
 ```bash
-git clone <this repo> && cd evalforge
+git clone https://github.com/Som0111/evalforge.git && cd evalforge
 pip install -e ".[dev]"
 
 pytest tests/                                    # 85 tests, no API key needed (judge calls are mocked)
